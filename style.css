@@ -66,6 +66,19 @@ button {
   gap: 11px;
   flex-shrink: 0;
 }
+.brand-logo-img {
+  width: 50px;
+  height: 50px;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+.brand:hover .brand-logo-img {
+  transform: scale(1.05);
+  box-shadow: 0 6px 18px rgba(155, 23, 57, 0.3);
+}
 .brand-mark {
   width: 40px;
   height: 40px;
