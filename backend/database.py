@@ -25,7 +25,10 @@ class DatabaseService:
     def __init__(self):
         self.use_prisma: bool = False
         self.prisma_client: Optional[Any] = None
-        self.sqlite_path = Path(__file__).resolve().parent / "local_dev.db"
+        if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+            self.sqlite_path = Path("/tmp") / "local_dev.db"
+        else:
+            self.sqlite_path = Path(__file__).resolve().parent / "local_dev.db"
         self._sqlite_conn: Optional[sqlite3.Connection] = None
 
     async def connect(self):
