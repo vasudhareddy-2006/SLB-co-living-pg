@@ -6,7 +6,7 @@ import re
 class LeadCreateRequest(BaseModel):
     fullName: str = Field(..., min_length=2, max_length=100, description="Full name of interested visitor")
     phone: str = Field(..., description="10-15 digit phone number")
-    roomType: str = Field(..., description="Single sharing, Double sharing, Triple sharing, Four sharing, etc.")
+    roomType: str = Field(..., description="Single sharing, Double sharing, Triple sharing, or Other / not sure")
     moveInDate: str = Field(..., description="Expected check-in date (YYYY-MM-DD)")
     preferredCallTime: Optional[str] = Field("ASAP", description="ASAP, Morning, Afternoon, Evening")
     requirements: Optional[str] = Field(None, max_length=1000, description="Any specific notes or questions")

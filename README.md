@@ -2,7 +2,7 @@
 
 A concise, responsive website built with HTML, CSS and JavaScript. It keeps the existing warm look across the site, with a dedicated black, cherry-red, burgundy, ivory and silver Facilities section, one slow-scrolling amenity rail, a single SVG butterfly, PG photos, Google Maps directions and an enquiry form.
 
-**Price note:** ₹18,000, ₹10,000, ₹8,000 and ₹7,000 are examples from another PG screenshot, not confirmed SLB Coliving PG rates. Confirm the real prices with the owner. The four-sharing card uses a clearly labelled concept image, not a photo of SLB.
+**Confirmed Room Rates:** Single sharing: ₹17,000 / month; Double sharing: ₹10,000 / month; Triple sharing: ₹7,000 / month.
 
 ## Run in VS Code
 
