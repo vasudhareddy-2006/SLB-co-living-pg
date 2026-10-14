@@ -13,11 +13,15 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Connect to DB
-    await db_service.connect()
+    try:
+        await db_service.connect()
+    except Exception as e:
+        print(f"Warning: Database connect in lifespan: {e}")
     yield
-    # Shutdown: Disconnect from DB
-    await db_service.disconnect()
+    try:
+        await db_service.disconnect()
+    except Exception:
+        pass
 
 app = FastAPI(
     title="SLB Coliving PG API",

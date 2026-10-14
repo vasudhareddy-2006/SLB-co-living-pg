@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -11,62 +12,89 @@ from backend.config import settings
 
 logger = logging.getLogger("slb_database")
 
-# Check if Prisma Client is available and generated
+# Check for psycopg2 and prisma
+PSYCOPG2_AVAILABLE = False
+try:
+    import psycopg2
+    import psycopg2.extras
+    PSYCOPG2_AVAILABLE = True
+except ImportError:
+    pass
+
 PRISMA_AVAILABLE = False
-Prisma = None
 try:
     from prisma import Prisma
     PRISMA_AVAILABLE = True
 except (ImportError, RuntimeError):
-    PRISMA_AVAILABLE = False
-    Prisma = None
+    pass
+
 
 class DatabaseService:
     def __init__(self):
-        self.use_prisma: bool = False
-        self.prisma_client: Optional[Any] = None
+        self.mode = "sqlite"  # "postgres" or "sqlite"
+        self._sqlite_conn: Optional[sqlite3.Connection] = None
         if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
             self.sqlite_path = Path("/tmp") / "local_dev.db"
         else:
             self.sqlite_path = Path(__file__).resolve().parent / "local_dev.db"
-        self._sqlite_conn: Optional[sqlite3.Connection] = None
+        self._ensure_connected()
+
+    def _ensure_connected(self):
+        """Auto-configure connection mode."""
+        db_url = settings.DATABASE_URL.strip()
+        is_real_postgres = (
+            db_url.startswith("postgresql://") or db_url.startswith("postgres://")
+        ) and "samplepass" not in db_url and "YOUR-PASSWORD" not in db_url
+        if is_real_postgres and PSYCOPG2_AVAILABLE:
+            self.mode = "postgres"
+        else:
+            self.mode = "sqlite"
+            if not self._sqlite_conn:
+                self._init_sqlite()
+
+    def _get_pg_conn(self):
+        """Get a fresh PostgreSQL connection to Supabase with SSL."""
+        conn = psycopg2.connect(
+            settings.DATABASE_URL.strip(),
+            cursor_factory=psycopg2.extras.RealDictCursor,
+            connect_timeout=10,
+            sslmode="require",
+        )
+        conn.autocommit = True
+        return conn
 
     async def connect(self):
-        """Connect to Supabase via Prisma, or fall back to local dev database."""
+        """Initialize connection to Supabase or SQLite fallback."""
         db_url = settings.DATABASE_URL.strip()
         is_real_postgres = (
             db_url.startswith("postgresql://") or db_url.startswith("postgres://")
         ) and "samplepass" not in db_url and "YOUR-PASSWORD" not in db_url
 
-        if PRISMA_AVAILABLE and is_real_postgres:
+        if is_real_postgres and PSYCOPG2_AVAILABLE:
             try:
-                logger.info("Attempting connection to Supabase PostgreSQL via Prisma...")
-                self.prisma_client = Prisma()
-                await self.prisma_client.connect()
-                self.use_prisma = True
-                logger.info("Successfully connected to Supabase PostgreSQL!")
+                conn = self._get_pg_conn()
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1;")
+                conn.close()
+                self.mode = "postgres"
+                logger.info("Successfully connected to Supabase PostgreSQL via psycopg2!")
             except Exception as e:
-                logger.warning(
-                    f"Could not connect to Supabase PostgreSQL ({e}). Falling back to local development database."
-                )
-                self.use_prisma = False
+                logger.warning(f"Could not connect to Supabase PostgreSQL ({e}). Using SQLite fallback.")
+                self.mode = "sqlite"
                 self._init_sqlite()
         else:
-            logger.info("Using local development database for instant setup.")
-            self.use_prisma = False
+            self.mode = "sqlite"
             self._init_sqlite()
 
         # Seed initial admin if needed
         await self._ensure_seed_admin()
 
     async def disconnect(self):
-        if self.use_prisma and self.prisma_client:
+        if self._sqlite_conn:
             try:
-                await self.prisma_client.disconnect()
+                self._sqlite_conn.close()
             except Exception:
                 pass
-        if self._sqlite_conn:
-            self._sqlite_conn.close()
 
     def _init_sqlite(self):
         """Initialize local SQLite database schema for dev/testing."""
@@ -105,36 +133,62 @@ class DatabaseService:
             """)
 
     async def _ensure_seed_admin(self):
-        """Ensure the default administrator account exists."""
-        admin = await self.get_user_by_email(settings.ADMIN_DEFAULT_EMAIL)
-        if not admin:
-            logger.info(f"Seeding default admin: {settings.ADMIN_DEFAULT_EMAIL}")
-            hashed = hash_password(settings.ADMIN_DEFAULT_PASSWORD)
-            await self.create_user(
-                email=settings.ADMIN_DEFAULT_EMAIL,
-                password_hash=hashed,
-                name=settings.ADMIN_DEFAULT_NAME,
-                role="ADMIN"
-            )
+        """Ensure default administrator accounts exist."""
+        try:
+            admin = await self.get_user_by_email(settings.ADMIN_DEFAULT_EMAIL)
+            if not admin:
+                logger.info(f"Seeding default admin: {settings.ADMIN_DEFAULT_EMAIL}")
+                hashed = hash_password(settings.ADMIN_DEFAULT_PASSWORD)
+                await self.create_user(
+                    email=settings.ADMIN_DEFAULT_EMAIL,
+                    password_hash=hashed,
+                    name=settings.ADMIN_DEFAULT_NAME,
+                    role="ADMIN"
+                )
+            
+            # Also ensure vasudhareddy9398@gmail.com exists
+            personal_admin = await self.get_user_by_email("vasudhareddy9398@gmail.com")
+            if not personal_admin:
+                hashed = hash_password(settings.ADMIN_DEFAULT_PASSWORD)
+                await self.create_user(
+                    email="vasudhareddy9398@gmail.com",
+                    password_hash=hashed,
+                    name="Vasudha Reddy",
+                    role="ADMIN"
+                )
+        except Exception as e:
+            logger.warning(f"Error checking seed admin: {e}")
 
     # -------------------------------------------------------------
     # User Operations
     # -------------------------------------------------------------
     async def get_user_by_email(self, email: str) -> Optional[dict[str, Any]]:
         email = email.strip().lower()
-        if self.use_prisma and self.prisma_client:
-            user = await self.prisma_client.user.find_unique(where={"email": email})
-            return user.model_dump() if user else None
-        
+        if self.mode == "postgres":
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute('SELECT * FROM users WHERE lower(email) = %s LIMIT 1;', (email,))
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+            finally:
+                conn.close()
+
         cursor = self._sqlite_conn.cursor()
         cursor.execute("SELECT * FROM users WHERE lower(email) = ?", (email,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
     async def get_user_by_id(self, user_id: str) -> Optional[dict[str, Any]]:
-        if self.use_prisma and self.prisma_client:
-            user = await self.prisma_client.user.find_unique(where={"id": user_id})
-            return user.model_dump() if user else None
+        if self.mode == "postgres":
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute('SELECT * FROM users WHERE id = %s LIMIT 1;', (user_id,))
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+            finally:
+                conn.close()
 
         cursor = self._sqlite_conn.cursor()
         cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
@@ -145,20 +199,27 @@ class DatabaseService:
         self, email: str, password_hash: str, name: str, role: str = "ADMIN"
     ) -> dict[str, Any]:
         email = email.strip().lower()
-        now_str = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
         user_id = str(uuid.uuid4())
 
-        if self.use_prisma and self.prisma_client:
-            user = await self.prisma_client.user.create(
-                data={
-                    "email": email,
-                    "passwordHash": password_hash,
-                    "name": name,
-                    "role": role,
-                }
-            )
-            return user.model_dump()
+        if self.mode == "postgres":
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        '''
+                        INSERT INTO users (id, email, "passwordHash", name, role, "createdAt", "updatedAt")
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        RETURNING *;
+                        ''',
+                        (user_id, email, password_hash, name, role, now_dt, now_dt)
+                    )
+                    row = cur.fetchone()
+                    return dict(row) if row else {}
+            finally:
+                conn.close()
 
+        now_str = now_dt.isoformat()
         with self._sqlite_conn:
             self._sqlite_conn.execute(
                 """
@@ -189,24 +250,33 @@ class DatabaseService:
         preferred_call_time: str = "ASAP",
         requirements: Optional[str] = None,
     ) -> dict[str, Any]:
-        now = datetime.now(timezone.utc)
-        now_str = now.isoformat()
+        now_dt = datetime.now(timezone.utc)
         lead_id = str(uuid.uuid4())
 
-        if self.use_prisma and self.prisma_client:
-            lead = await self.prisma_client.callbacklead.create(
-                data={
-                    "fullName": full_name,
-                    "phone": phone,
-                    "roomType": room_type,
-                    "moveInDate": move_in_date,
-                    "preferredCallTime": preferred_call_time or "ASAP",
-                    "requirements": requirements,
-                    "status": "PENDING_CALL",
-                }
-            )
-            return lead.model_dump()
+        if self.mode == "postgres":
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        '''
+                        INSERT INTO callback_leads (
+                            id, "fullName", phone, "roomType", "moveInDate",
+                            "preferredCallTime", requirements, status, "adminNotes", "createdAt", "updatedAt"
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING *;
+                        ''',
+                        (
+                            lead_id, full_name, phone, room_type, move_in_date,
+                            preferred_call_time or "ASAP", requirements, "PENDING_CALL", "", now_dt, now_dt
+                        )
+                    )
+                    row = cur.fetchone()
+                    return dict(row) if row else {}
+            finally:
+                conn.close()
 
+        now_str = now_dt.isoformat()
         with self._sqlite_conn:
             self._sqlite_conn.execute(
                 """
@@ -217,17 +287,8 @@ class DatabaseService:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    lead_id,
-                    full_name,
-                    phone,
-                    room_type,
-                    move_in_date,
-                    preferred_call_time or "ASAP",
-                    requirements,
-                    "PENDING_CALL",
-                    "",
-                    now_str,
-                    now_str,
+                    lead_id, full_name, phone, room_type, move_in_date,
+                    preferred_call_time or "ASAP", requirements, "PENDING_CALL", "", now_str, now_str
                 ),
             )
         return {
@@ -240,8 +301,8 @@ class DatabaseService:
             "requirements": requirements,
             "status": "PENDING_CALL",
             "adminNotes": "",
-            "createdAt": now,
-            "updatedAt": now,
+            "createdAt": now_dt,
+            "updatedAt": now_dt,
         }
 
     async def get_leads(
@@ -251,22 +312,26 @@ class DatabaseService:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        if self.use_prisma and self.prisma_client:
-            where_clause: dict[str, Any] = {}
-            if status and status.upper() != "ALL":
-                where_clause["status"] = status
-            if search:
-                where_clause["OR"] = [
-                    {"fullName": {"contains": search, "mode": "insensitive"}},
-                    {"phone": {"contains": search}},
-                ]
-            leads = await self.prisma_client.callbacklead.find_many(
-                where=where_clause,
-                take=limit,
-                skip=offset,
-                order={"createdAt": "desc"},
-            )
-            return [lead.model_dump() for lead in leads]
+        if self.mode == "postgres":
+            conn = self._get_pg_conn()
+            try:
+                query = 'SELECT * FROM callback_leads WHERE 1=1'
+                params = []
+                if status and status.upper() != "ALL":
+                    query += ' AND status = %s'
+                    params.append(status)
+                if search:
+                    query += ' AND ("fullName" ILIKE %s OR phone ILIKE %s)'
+                    params.extend([f"%{search}%", f"%{search}%"])
+                query += ' ORDER BY "createdAt" DESC LIMIT %s OFFSET %s;'
+                params.extend([limit, offset])
+
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    rows = cur.fetchall()
+                    return [dict(r) for r in rows]
+            finally:
+                conn.close()
 
         query = "SELECT * FROM callback_leads WHERE 1=1"
         params: list[Any] = []
@@ -287,9 +352,15 @@ class DatabaseService:
         return [dict(row) for row in rows]
 
     async def get_lead_by_id(self, lead_id: str) -> Optional[dict[str, Any]]:
-        if self.use_prisma and self.prisma_client:
-            lead = await self.prisma_client.callbacklead.find_unique(where={"id": lead_id})
-            return lead.model_dump() if lead else None
+        if self.mode == "postgres":
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute('SELECT * FROM callback_leads WHERE id = %s LIMIT 1;', (lead_id,))
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+            finally:
+                conn.close()
 
         cursor = self._sqlite_conn.cursor()
         cursor.execute("SELECT * FROM callback_leads WHERE id = ?", (lead_id,))
@@ -303,52 +374,61 @@ class DatabaseService:
         admin_notes: Optional[str] = None,
         assigned_to_id: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
-        now = datetime.now(timezone.utc)
-        now_str = now.isoformat()
+        now_dt = datetime.now(timezone.utc)
 
-        if self.use_prisma and self.prisma_client:
-            data: dict[str, Any] = {}
-            if status:
-                data["status"] = status
-            if admin_notes is not None:
-                data["adminNotes"] = admin_notes
-            if assigned_to_id:
-                data["assignedToId"] = assigned_to_id
+        if self.mode == "postgres":
+            conn = self._get_pg_conn()
+            try:
+                updates = ['"updatedAt" = %s']
+                params = [now_dt]
+                if status:
+                    updates.append("status = %s")
+                    params.append(status)
+                if admin_notes is not None:
+                    updates.append('"adminNotes" = %s')
+                    params.append(admin_notes)
+                if assigned_to_id:
+                    updates.append('"assignedToId" = %s')
+                    params.append(assigned_to_id)
+                params.append(lead_id)
 
-            lead = await self.prisma_client.callbacklead.update(
-                where={"id": lead_id},
-                data=data,
-            )
-            return lead.model_dump() if lead else None
+                query = f'UPDATE callback_leads SET {", ".join(updates)} WHERE id = %s RETURNING *;'
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    row = cur.fetchone()
+                    return dict(row) if row else None
+            finally:
+                conn.close()
 
-        updates: list[str] = ["updatedAt = ?"]
-        params: list[Any] = [now_str]
-
+        now_str = now_dt.isoformat()
+        updates_sql = ["updatedAt = ?"]
+        params_sql: list[Any] = [now_str]
         if status:
-            updates.append("status = ?")
-            params.append(status)
+            updates_sql.append("status = ?")
+            params_sql.append(status)
         if admin_notes is not None:
-            updates.append("adminNotes = ?")
-            params.append(admin_notes)
+            updates_sql.append("adminNotes = ?")
+            params_sql.append(admin_notes)
         if assigned_to_id:
-            updates.append("assignedToId = ?")
-            params.append(assigned_to_id)
+            updates_sql.append("assignedToId = ?")
+            params_sql.append(assigned_to_id)
+        params_sql.append(lead_id)
 
-        params.append(lead_id)
-        query = f"UPDATE callback_leads SET {', '.join(updates)} WHERE id = ?"
-
+        query = f"UPDATE callback_leads SET {', '.join(updates_sql)} WHERE id = ?"
         with self._sqlite_conn:
-            self._sqlite_conn.execute(query, params)
+            self._sqlite_conn.execute(query, params_sql)
 
         return await self.get_lead_by_id(lead_id)
 
     async def delete_lead(self, lead_id: str) -> bool:
-        if self.use_prisma and self.prisma_client:
+        if self.mode == "postgres":
+            conn = self._get_pg_conn()
             try:
-                await self.prisma_client.callbacklead.delete(where={"id": lead_id})
-                return True
-            except Exception:
-                return False
+                with conn.cursor() as cur:
+                    cur.execute('DELETE FROM callback_leads WHERE id = %s;', (lead_id,))
+                    return cur.rowcount > 0
+            finally:
+                conn.close()
 
         with self._sqlite_conn:
             cursor = self._sqlite_conn.execute(
@@ -357,19 +437,29 @@ class DatabaseService:
             return cursor.rowcount > 0
 
     async def get_stats(self) -> dict[str, int]:
-        if self.use_prisma and self.prisma_client:
-            total = await self.prisma_client.callbacklead.count()
-            pending = await self.prisma_client.callbacklead.count(where={"status": "PENDING_CALL"})
-            called = await self.prisma_client.callbacklead.count(where={"status": "CALLED"})
-            visit = await self.prisma_client.callbacklead.count(where={"status": "VISIT_SCHEDULED"})
-            booked = await self.prisma_client.callbacklead.count(where={"status": "BOOKED"})
-            return {
-                "total": total,
-                "pendingCalls": pending,
-                "called": called,
-                "visitsScheduled": visit,
-                "booked": booked,
-            }
+        if self.mode == "postgres":
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute('SELECT COUNT(*) as count FROM callback_leads;')
+                    total = cur.fetchone()["count"]
+                    cur.execute("SELECT COUNT(*) as count FROM callback_leads WHERE status = 'PENDING_CALL';")
+                    pending = cur.fetchone()["count"]
+                    cur.execute("SELECT COUNT(*) as count FROM callback_leads WHERE status = 'CALLED';")
+                    called = cur.fetchone()["count"]
+                    cur.execute("SELECT COUNT(*) as count FROM callback_leads WHERE status = 'VISIT_SCHEDULED';")
+                    visit = cur.fetchone()["count"]
+                    cur.execute("SELECT COUNT(*) as count FROM callback_leads WHERE status = 'BOOKED';")
+                    booked = cur.fetchone()["count"]
+                    return {
+                        "total": total,
+                        "pendingCalls": pending,
+                        "called": called,
+                        "visitsScheduled": visit,
+                        "booked": booked,
+                    }
+            finally:
+                conn.close()
 
         cursor = self._sqlite_conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM callback_leads")
