@@ -1,0 +1,43 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider             = "prisma-client-py"
+  recursive_type_depth = 5
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("ADMIN") // ADMIN, STAFF
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  handledLeads CallbackLead[]
+
+  @@map("users")
+}
+
+model CallbackLead {
+  id                String   @id @default(uuid())
+  fullName          String
+  phone             String
+  roomType          String   // "Single sharing", "Double sharing", "Triple sharing", "Four sharing", "Other / not sure"
+  moveInDate        String
+  preferredCallTime String   @default("ASAP") // "ASAP", "Morning (9am-12pm)", "Afternoon (12pm-5pm)", "Evening (5pm-8pm)"
+  requirements      String?
+  status            String   @default("PENDING_CALL") // "PENDING_CALL", "CALLED", "VISIT_SCHEDULED", "BOOKED", "CANCELLED"
+  adminNotes        String?
+  assignedToId      String?
+  assignedTo        User?    @relation(fields: [assignedToId], references: [id])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([phone])
+  @@index([status])
+  @@map("callback_leads")
+}

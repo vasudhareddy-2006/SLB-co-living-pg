@@ -148,18 +148,94 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const requirements =
       form.elements.requirements.value.trim() || "None added";
-    const draft = `Hello, I would like to enquire about SLB Coliving PG. Name: ${name}. Phone: ${rawPhone}. Room preference: ${room}. Check-in date: ${date}. Special requirements: ${requirements}.`;
+    const callTime = form.elements.callTime?.value || "ASAP";
+    const draft = `Hello, I would like to enquire about SLB Coliving PG. Name: ${name}. Phone: ${rawPhone}. Room preference: ${room}. Check-in date: ${date}. Best time to call: ${callTime}. Special requirements: ${requirements}.`;
     const whatsappUrl = `https://wa.me/919966367235?text=${encodeURIComponent(draft)}`;
-    message.replaceChildren();
-    const copy = document.createElement("p");
-    copy.textContent = `Thanks, ${name}. Your enquiry details are ready, but have not been sent or saved. Choose WhatsApp below to review and send the pre-filled message, or call the PG.`;
-    const sendLink = document.createElement("a");
-    sendLink.href = whatsappUrl;
-    sendLink.target = "_blank";
-    sendLink.rel = "noopener";
-    sendLink.textContent = "Review and send via WhatsApp ↗";
-    message.append(copy, sendLink);
-    message.hidden = false;
+
+    const submitBtn = form.querySelector("#submit-btn");
+    const originalBtnText = submitBtn ? submitBtn.innerHTML : "Request Call-Back";
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = "Submitting request... ⏳";
+    }
+
+    const API_BASE = window.location.origin.includes("http") ? window.location.origin : "http://localhost:8000";
+
+    // Submit lead to FastAPI Backend
+    fetch(`${API_BASE}/api/leads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fullName: name,
+        phone: phone,
+        roomType: room,
+        moveInDate: date,
+        preferredCallTime: callTime,
+        requirements: requirements !== "None added" ? requirements : null,
+      }),
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Backend response error");
+        }
+        return response.json();
+      })
+      .then((savedLead) => {
+        message.replaceChildren();
+        const successBox = document.createElement("div");
+        successBox.style.padding = "0.75rem 0";
+
+        const title = document.createElement("strong");
+        title.style.display = "block";
+        title.style.color = "#10b981";
+        title.style.fontSize = "1.05rem";
+        title.style.marginBottom = "0.4rem";
+        title.textContent = "✓ Call-Back Request Received!";
+
+        const copy = document.createElement("p");
+        copy.textContent = `Thanks, ${name}! Your request for ${room} has been recorded in our system. Our PG team will call you back at ${rawPhone} (${callTime}).`;
+
+        const waPrompt = document.createElement("p");
+        waPrompt.style.marginTop = "0.5rem";
+        waPrompt.style.fontSize = "0.85rem";
+        waPrompt.style.color = "var(--text-muted, #aaa)";
+        waPrompt.textContent = "Need an immediate answer right now?";
+
+        const sendLink = document.createElement("a");
+        sendLink.href = whatsappUrl;
+        sendLink.target = "_blank";
+        sendLink.rel = "noopener";
+        sendLink.className = "button";
+        sendLink.style.marginTop = "0.5rem";
+        sendLink.style.display = "inline-flex";
+        sendLink.textContent = "Chat on WhatsApp now ↗";
+
+        successBox.append(title, copy, waPrompt, sendLink);
+        message.append(successBox);
+        message.hidden = false;
+        form.reset();
+        dateInput.min = localDate();
+      })
+      .catch((err) => {
+        // Graceful fallback if backend is offline or on purely static file:// host
+        console.warn("FastAPI backend offline or unreachable, providing WhatsApp fallback:", err);
+        message.replaceChildren();
+        const copy = document.createElement("p");
+        copy.textContent = `Thanks, ${name}. Your call-back request is prepared. Tap WhatsApp below to send your details directly to the manager, or call us directly.`;
+        const sendLink = document.createElement("a");
+        sendLink.href = whatsappUrl;
+        sendLink.target = "_blank";
+        sendLink.rel = "noopener";
+        sendLink.textContent = "Send via WhatsApp ↗";
+        message.append(copy, sendLink);
+        message.hidden = false;
+      })
+      .finally(() => {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = originalBtnText;
+        }
+      });
   });
 
   // Facility marquee: clicking a name pauses its row and reveals only its

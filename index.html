@@ -499,8 +499,8 @@
             >
           </div>
           <form class="booking-form" id="booking-form" novalidate>
-            <h3>Send an enquiry</h3>
-            <p>We will prepare a WhatsApp message for you to review.</p>
+            <h3>Request a Call-Back</h3>
+            <p>Leave your details and our PG manager will call you back.</p>
             <div class="form-row">
               <label
                 >Full name *<input
@@ -531,24 +531,35 @@
                 <option>Other / not sure</option></select
               ><small class="field-error"></small
             ></label>
-            <label
-              >Check-in date *<input name="date" type="date" required /><small
-                class="field-error"
-              ></small
-            ></label>
+            <div class="form-row">
+              <label
+                >Check-in date *<input name="date" type="date" required /><small
+                  class="field-error"
+                ></small
+              ></label>
+              <label
+                >Best time to call you *<select name="callTime" required>
+                  <option value="ASAP" selected>Call me ASAP ⚡</option>
+                  <option value="Morning (9 AM – 12 PM)">Morning (9 AM – 12 PM)</option>
+                  <option value="Afternoon (12 PM – 5 PM)">Afternoon (12 PM – 5 PM)</option>
+                  <option value="Evening (5 PM – 8 PM)">Evening (5 PM – 8 PM)</option>
+                  <option value="Weekend">Weekend anytime</option>
+                </select><small class="field-error"></small
+              ></label>
+            </div>
             <label
               >Special requirements<textarea
                 name="requirements"
                 rows="3"
-                placeholder="Anything you would like to ask"
+                placeholder="Anything specific you'd like to ask (e.g. food, parking, upper floor)"
               ></textarea>
             </label>
             <div class="form-buttons">
-              <button class="button" type="submit">
-                Prepare enquiry <span>↗</span></button
-              ><a class="callback-link" href="tel:+919966367235">Or call us</a>
+              <button class="button" type="submit" id="submit-btn">
+                Request Call-Back <span>↗</span></button
+              ><a class="callback-link" href="tel:+919966367235">Or call directly</a>
             </div>
-            <p class="form-note">Nothing is stored or sent automatically.</p>
+            <p class="form-note">Your enquiry is recorded directly; our manager will call you at your preferred time.</p>
             <div
               class="form-message"
               role="status"
@@ -698,7 +709,8 @@
         <div class="footer-column">
           <strong>CONTACT</strong><a href="tel:+919966367235">+91 99663 67235</a
           ><a href="tel:+918074155384">+91 80741 55384</a
-          ><a href="#location">Get directions</a>
+          ><a href="#location">Get directions</a
+          ><a href="/admin" target="_blank" style="color: var(--gold); font-weight: 600;">Staff Portal ↗</a>
         </div>
       </div>
       <div class="footer-bottom">

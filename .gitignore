@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+backend/venv/
+.venv/
+env/
+
+# Environment and secrets
+.env
+backend/.env
+
+# Local SQLite test databases
+*.db
+backend/local_dev.db
+
+# OS files
+.DS_Store
+Thumbs.db
